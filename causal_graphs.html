@@ -1,0 +1,482 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Causal Graph Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .node-rect {
+            cursor: grab;
+            stroke: #4b5563;
+            stroke-width: 2;
+            fill: #fff;
+            transition: fill 0.3s, stroke 0.3s;
+        }
+        .node-group.active .node-rect {
+            cursor: grabbing;
+        }
+        .edge {
+            stroke: #9ca3af;
+            stroke-width: 2px;
+            transition: stroke 0.3s, stroke-width 0.3s;
+        }
+        .node-selection {
+            stroke: #3b82f6;
+            stroke-width: 3px;
+            stroke-dasharray: 4;
+            animation: dash-animation 1s linear infinite;
+        }
+        .backdoor-path {
+            stroke: #f97316;
+            stroke-width: 4px;
+        }
+        .confounder .node-rect {
+            fill: #fef3c7;
+            stroke: #f59e0b;
+        }
+        @keyframes dash-animation {
+            to {
+                stroke-dashoffset: -20;
+            }
+        }
+        .modal-backdrop {
+            transition: opacity 0.3s ease;
+        }
+        .modal-content {
+            transition: transform 0.3s ease;
+        }
+    </style>
+     <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body class="bg-gray-100 text-gray-800 flex flex-col md:flex-row h-screen">
+
+    <!-- Controls Panel -->
+    <div class="w-full md:w-80 bg-white p-4 shadow-lg flex-shrink-0 z-10 border-r border-gray-200 overflow-y-auto">
+        <h1 class="text-xl font-bold text-gray-900 mb-4">Graph Controls</h1>
+        <div class="space-y-3">
+            <button id="add-node-btn" class="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all duration-200 flex items-center justify-center">
+                Add Node
+            </button>
+             <button id="clear-graph-btn" class="w-full bg-red-500 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all duration-200 flex items-center justify-center">
+                Clear Graph
+            </button>
+        </div>
+        
+        <hr class="my-6 border-gray-200">
+
+        <h2 class="text-lg font-bold text-gray-900 mb-2">Backdoor Path Analysis</h2>
+        <div class="space-y-3">
+            <div>
+                <label for="treatment-select" class="block text-sm font-medium text-gray-700">Treatment (X)</label>
+                <select id="treatment-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"></select>
+            </div>
+            <div>
+                <label for="outcome-select" class="block text-sm font-medium text-gray-700">Outcome (Y)</label>
+                <select id="outcome-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"></select>
+            </div>
+            <div class="flex space-x-2">
+                <button id="find-paths-btn" class="flex-grow bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all duration-200">
+                    Analyze
+                </button>
+                <button id="clear-analysis-btn" class="flex-shrink-0 bg-gray-500 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all duration-200">
+                    Clear
+                </button>
+            </div>
+        </div>
+        <div id="analysis-results" class="mt-4 text-sm text-gray-600 hidden">
+            <h3 class="font-bold text-gray-800">Confounders to Control For:</h3>
+            <p id="confounders-list" class="mb-2 p-2 bg-yellow-50 rounded-md"></p>
+            <button id="create-dowhy-btn" class="w-full bg-purple-600 hover:bg-purple-700 text-white font-semibold py-2 px-4 rounded-lg shadow-md transition-all duration-200 mt-2">
+                Create DoWhy Analysis Code
+            </button>
+        </div>
+
+        <hr class="my-6 border-gray-200">
+
+        <h2 class="text-lg font-bold text-gray-900 mb-2">Instructions</h2>
+        <ul class="list-disc list-inside text-sm text-gray-600 space-y-2">
+           <li>Build your causal graph with nodes and edges.</li>
+           <li>To create an edge, click a source node, then a target node.</li>
+           <li>To remove an edge, click the nodes in the reverse direction.</li>
+           <li>Select Treatment (X) and Outcome (Y) nodes.</li>
+           <li>Click "Analyze" to find confounders.</li>
+           <li>Click "Create DoWhy..." to generate the analysis code.</li>
+        </ul>
+    </div>
+
+    <!-- Main Content -->
+    <div class="flex-grow flex flex-col p-4 overflow-y-auto">
+        <div id="canvas-container" class="flex-grow bg-white rounded-xl shadow-inner border border-gray-200 relative min-h-[50vh]">
+            <svg id="canvas" class="w-full h-full"></svg>
+        </div>
+        <div class="mt-4 bg-gray-800 rounded-xl shadow-lg p-4 flex-shrink-0">
+            <div class="flex justify-between items-center mb-2">
+                <h2 class="text-lg font-semibold text-gray-200">Generated Code</h2>
+                <button id="copy-code-btn" class="bg-gray-600 hover:bg-gray-500 text-white font-semibold py-1 px-3 rounded-md text-sm">Copy</button>
+            </div>
+            <pre><code id="code-output" class="text-sm text-green-300 whitespace-pre-wrap"># Build a graph to generate code.</code></pre>
+        </div>
+    </div>
+
+    <!-- Modals -->
+    <div id="add-node-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 hidden"></div>
+    <div id="clear-graph-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 hidden"></div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', () => {
+        // --- D3/SVG Setup ---
+        const svg = d3.select("#canvas");
+        const canvasContainer = document.getElementById('canvas-container');
+        const width = canvasContainer.clientWidth;
+        const height = canvasContainer.clientHeight;
+        svg.attr('width', width).attr('height', height);
+
+        // --- DOM Elements ---
+        const addNodeBtn = document.getElementById('add-node-btn');
+        const clearGraphBtn = document.getElementById('clear-graph-btn');
+        const findPathsBtn = document.getElementById('find-paths-btn');
+        const clearAnalysisBtn = document.getElementById('clear-analysis-btn');
+        const createDowhyBtn = document.getElementById('create-dowhy-btn');
+        const treatmentSelect = document.getElementById('treatment-select');
+        const outcomeSelect = document.getElementById('outcome-select');
+        const analysisResults = document.getElementById('analysis-results');
+        const confoundersList = document.getElementById('confounders-list');
+        const codeOutput = document.getElementById('code-output');
+        const copyCodeBtn = document.getElementById('copy-code-btn');
+
+        // --- Graph State ---
+        let nodes = [];
+        let edges = [];
+        let nodeIdCounter = 0;
+        let selectedNode = null;
+        let highlightedPaths = [];
+        let confounders = new Set();
+
+        // --- D3 Simulation & Zoom ---
+        const simulation = d3.forceSimulation(nodes)
+            .force("link", d3.forceLink(edges).id(d => d.id).strength(0))
+            .on("tick", ticked);
+
+        const zoom = d3.zoom().scaleExtent([0.1, 4]).on("zoom", zoomed);
+        const container = svg.append("g");
+        svg.call(zoom);
+
+        const initialScale = 1.2;
+        const initialTransform = d3.zoomIdentity.translate((width / 2) * (1 - initialScale), (height / 2) * (1 - initialScale)).scale(initialScale);
+        svg.call(zoom.transform, initialTransform);
+
+        container.append('defs').append('marker')
+            .attr('id', 'arrowhead')
+            .attr('viewBox', '-0 -5 10 10').attr('refX', 5).attr('refY', 0)
+            .attr('orient', 'auto').attr('markerWidth', 5).attr('markerHeight', 5)
+            .append('svg:path').attr('d', 'M 0,-5 L 10 ,0 L 0,5').attr('fill', '#9ca3af');
+        
+        const edgeGroup = container.append("g").attr("class", "edges");
+        const nodeGroup = container.append("g").attr("class", "nodes");
+        
+        // --- Core Rendering & Logic ---
+        function render(includeDowhy = false) {
+            updateDropdowns();
+
+            const nodeElements = nodeGroup.selectAll(".node-group").data(nodes, d => d.id);
+            nodeElements.exit().remove();
+            const nodeEnter = nodeElements.enter().append("g")
+                .attr("class", "node-group")
+                .call(d3.drag().on("start", dragstarted).on("drag", dragged).on("end", dragended))
+                .on("click", nodeClicked);
+            
+            nodeEnter.append("rect").attr("class", "node-rect").attr("rx", 20).attr("ry", 20);
+            nodeEnter.append("text").attr("dy", ".35em").attr("text-anchor", "middle").style("font-size", "14px").style("font-weight", "600").style("pointer-events", "none").text(d => d.name);
+            nodeEnter.append("rect").attr("class", "node-selection-circle").attr("fill", "none").style("pointer-events", "none");
+            
+            nodeGroup.selectAll(".node-group").each(function(d) {
+                const group = d3.select(this);
+                const textElem = group.select('text').node();
+                const bbox = textElem.getBBox();
+                const padding = { x: 30, y: 20 };
+                d.width = bbox.width + padding.x;
+                d.height = bbox.height + padding.y;
+                group.select('.node-rect').attr('x', -d.width / 2).attr('y', -d.height / 2).attr('width', d.width).attr('height', d.height);
+                group.select('.node-selection-circle').attr('x', -d.width / 2 - 5).attr('y', -d.height / 2 - 5).attr('width', d.width + 10).attr('height', d.height + 10).attr('rx', 25);
+            }).classed("confounder", d => confounders.has(d.id));
+
+            const edgeElements = edgeGroup.selectAll(".edge").data(edges, d => `${d.source.id}-${d.target.id}`);
+            edgeElements.exit().remove();
+            edgeElements.enter().append("line").attr("class", "edge").attr('marker-end', 'url(#arrowhead)');
+            edgeGroup.selectAll(".edge").classed("backdoor-path", d => isEdgeInBackdoorPath(d));
+
+            simulation.nodes(nodes);
+            simulation.force("link").links(edges);
+            simulation.alpha(0.3).restart();
+            generateCode(includeDowhy);
+        }
+
+        function ticked() {
+            nodeGroup.selectAll(".node-group").attr("transform", d => `translate(${d.x}, ${d.y})`);
+            edgeGroup.selectAll(".edge").each(function(d) {
+                const sourcePoint = getIntersectionPoint(d.target, d.source);
+                const targetPoint = getIntersectionPoint(d.source, d.target);
+                d3.select(this).attr("x1", sourcePoint.x).attr("y1", sourcePoint.y).attr("x2", targetPoint.x).attr("y2", targetPoint.y);
+            });
+        }
+        
+        function zoomed(event) { container.attr("transform", event.transform); }
+
+        function updateDropdowns() {
+            [treatmentSelect, outcomeSelect].forEach(select => {
+                const selectedValue = select.value;
+                select.innerHTML = '';
+                nodes.forEach(node => {
+                    const option = document.createElement('option');
+                    option.value = node.id;
+                    option.textContent = node.name;
+                    select.appendChild(option);
+                });
+                select.value = selectedValue;
+            });
+        }
+
+        // --- Backdoor Path Analysis ---
+        function findBackdoorPaths() {
+            clearAnalysis();
+            const treatmentId = parseInt(treatmentSelect.value);
+            const outcomeId = parseInt(outcomeSelect.value);
+
+            if (isNaN(treatmentId) || isNaN(outcomeId) || treatmentId === outcomeId) {
+                showModal("Selection Error", "Please select distinct Treatment and Outcome nodes.");
+                return;
+            }
+
+            const adj = new Map(nodes.map(n => [n.id, []]));
+            const reverseAdj = new Map(nodes.map(n => [n.id, []]));
+            edges.forEach(edge => {
+                adj.get(edge.source.id).push(edge.target.id);
+                reverseAdj.get(edge.target.id).push(edge.source.id);
+            });
+
+            const descendants = new Set();
+            const queue = [treatmentId];
+            const visitedDesc = new Set([treatmentId]);
+            while(queue.length > 0) {
+                const u = queue.shift();
+                if (adj.has(u)) {
+                    for (const v of adj.get(u)) {
+                        if (!visitedDesc.has(v)) {
+                            visitedDesc.add(v);
+                            descendants.add(v);
+                            queue.push(v);
+                        }
+                    }
+                }
+            }
+            
+            const allPaths = [];
+            function findAllPathsUtil(u, d, visited, path) {
+                visited.add(u);
+                path.push(u);
+                if (u === d) {
+                    allPaths.push([...path]);
+                } else {
+                    const neighbors = [...(adj.get(u) || []), ...(reverseAdj.get(u) || [])];
+                    for (const i of new Set(neighbors)) {
+                        if (!visited.has(i)) {
+                            findAllPathsUtil(i, d, visited, path);
+                        }
+                    }
+                }
+                path.pop();
+                visited.delete(u);
+            }
+            findAllPathsUtil(treatmentId, outcomeId, new Set(), []);
+
+            allPaths.forEach(path => {
+                if (path.length > 1 && reverseAdj.get(path[0])?.includes(path[1])) {
+                    let isBackdoor = true;
+                    for (let i = 1; i < path.length - 1; i++) {
+                        if (descendants.has(path[i])) {
+                            isBackdoor = false;
+                            break;
+                        }
+                    }
+                    if (isBackdoor) {
+                        highlightedPaths.push(path);
+                        path.forEach(id => {
+                            if (id !== treatmentId && id !== outcomeId) {
+                                confounders.add(id);
+                            }
+                        });
+                    }
+                }
+            });
+            
+            confoundersList.textContent = confounders.size > 0 ? [...confounders].map(id => nodes.find(n => n.id === id).name).join(', ') : 'None';
+            analysisResults.classList.remove('hidden');
+            render();
+        }
+
+        function clearAnalysis() {
+            highlightedPaths = [];
+            confounders = new Set();
+            analysisResults.classList.add('hidden');
+            render();
+        }
+        
+        function isEdgeInBackdoorPath(edge) {
+            for (const path of highlightedPaths) {
+                for (let i = 0; i < path.length - 1; i++) {
+                    if ((path[i] === edge.source.id && path[i+1] === edge.target.id) || (path[i] === edge.target.id && path[i+1] === edge.source.id)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        // --- Utility & Event Handlers ---
+        function getIntersectionPoint(s, t) { const dx = t.x - s.x, dy = t.y - s.y, w = t.width / 2, h = t.height / 2; if (dx === 0 && dy === 0) return {x:t.x, y:t.y}; const tan_phi = Math.abs(dy / dx), tan_theta = h / w; if (tan_phi < tan_theta) return {x:t.x-w*Math.sign(dx), y:t.y-w*tan_phi*Math.sign(dy)}; else return {x:t.x-h/tan_phi*Math.sign(dx), y:t.y-h*Math.sign(dy)}; }
+        function dragstarted(e, d) { if (!e.active) simulation.alphaTarget(0.3).restart(); d.fx = d.x; d.fy = d.y; d3.select(this).classed("active", true); }
+        function dragged(e, d) { d.fx = e.x; d.fy = e.y; }
+        function dragended(e, d) { if (!e.active) simulation.alphaTarget(0); d3.select(this).classed("active", false); }
+        
+        function nodeClicked(event, d) {
+            event.stopPropagation();
+            if (selectedNode) {
+                if (selectedNode.id !== d.id) {
+                    const reverseEdgeIndex = edges.findIndex(edge => edge.source.id === d.id && edge.target.id === selectedNode.id);
+                    if (reverseEdgeIndex > -1) {
+                        edges.splice(reverseEdgeIndex, 1);
+                    } else {
+                        const edgeExists = edges.some(edge => (edge.source.id === selectedNode.id && edge.target.id === d.id));
+                        if (!edgeExists) {
+                            edges.push({ source: selectedNode.node, target: d });
+                        }
+                    }
+                }
+                d3.select(selectedNode.element).select(".node-selection-circle").classed("node-selection", false);
+                selectedNode = null;
+            } else {
+                selectedNode = { id: d.id, node: d, element: this };
+                d3.select(this).select(".node-selection-circle").classed("node-selection", true);
+            }
+            render();
+        }
+
+        function deselectNode() { if (selectedNode) { d3.select(selectedNode.element).select(".node-selection-circle").classed("node-selection", false); selectedNode = null; } }
+        function showModal(title, message, onConfirm, confirmText = 'OK') { const modal = document.getElementById('add-node-modal'); modal.innerHTML = `<div class="bg-white rounded-lg shadow-2xl p-6 w-full max-w-sm"><h3 class="text-lg font-bold mb-2">${title}</h3><div class="text-gray-600 mb-6">${message}</div><div class="flex justify-end space-x-3"><button id="modal-cancel-btn" class="bg-gray-200 py-2 px-4 rounded-lg">Cancel</button><button id="modal-confirm-btn" class="bg-blue-500 text-white py-2 px-4 rounded-lg">${confirmText}</button></div></div>`; modal.classList.remove('hidden'); const confirmBtn = document.getElementById('modal-confirm-btn'); const cancelBtn = document.getElementById('modal-cancel-btn'); if(onConfirm) { confirmBtn.onclick = () => { onConfirm(); modal.classList.add('hidden'); }; cancelBtn.onclick = () => modal.classList.add('hidden'); } else { confirmBtn.style.display = 'none'; cancelBtn.textContent = 'OK'; cancelBtn.onclick = () => modal.classList.add('hidden'); } }
+        function openAddNodeModal() { showModal("Add New Node", `<label for="node-name-input" class="block text-sm font-medium text-gray-700">Node Name</label><input type="text" id="node-name-input" class="mt-1 block w-full px-3 py-2 border rounded-md" value="Var_${nodeIdCounter+1}"><p id="node-name-error" class="text-red-500 text-sm mt-1 hidden">Name cannot be empty.</p>`, saveNode, "Save"); document.getElementById('node-name-input').focus(); }
+        function saveNode() { const input = document.getElementById('node-name-input'); const name = input.value.trim(); if(name){ const currentTransform = d3.zoomTransform(svg.node()); nodes.push({id:nodeIdCounter++, name:name.replace(/[^a-zA-Z0-9_]/g,'_'), x: (width/2 - currentTransform.x) / currentTransform.k, y: (height/2 - currentTransform.y) / currentTransform.k }); render(); } else { document.getElementById('node-name-error').classList.remove('hidden'); } }
+        function openClearGraphModal() { showModal("Are you sure?", "This will permanently delete the entire graph.", executeClearGraph, "Clear Graph"); }
+        function executeClearGraph() { nodes = []; edges = []; nodeIdCounter = 0; selectedNode = null; clearAnalysis(); }
+        
+        function generateCode(includeDowhy = false) {
+            if (nodes.length === 0) { codeOutput.textContent = "# Build a graph to generate code."; return; }
+            const nodeLines = nodes.length > 0 ? nodes.map(n => `    '${n.name}'`).join(',\n') : '';
+            const edgeLines = edges.length > 0 ? edges.map(e => `    ('${e.source.name}', '${e.target.name}')`).join(',\n') : '';
+            const treatmentNode = nodes.find(n => n.id === parseInt(treatmentSelect.value));
+            const outcomeNode = nodes.find(n => n.id === parseInt(outcomeSelect.value));
+
+            let analysisCode = '';
+            if (includeDowhy && treatmentNode && outcomeNode) {
+                const confounderNames = [...confounders].map(id => nodes.find(n => n.id === id).name);
+                analysisCode = `
+# --- Causal Analysis with DoWhy ---
+# This template shows how to use the identified confounders in a full analysis.
+#
+# IMPORTANT: You must define a pandas DataFrame named 'df' before this section
+# for the analysis to run.
+# Example: df = pd.read_csv('your_data.csv')
+
+try:
+    if 'df' not in locals() and 'df' not in globals():
+        raise NameError("DataFrame 'df' not found.")
+
+    from dowhy import CausalModel
+    
+    # 2. Create the Causal Model from the graph and data.
+    model = CausalModel(
+        data=df,
+        treatment='${treatmentNode.name}',
+        outcome='${outcomeNode.name}',
+        graph=G.copy() 
+    )
+
+    # 3. Identify the causal effect.
+    identified_estimand = model.identify_effect(proceed_when_unidentifiable=True)
+    print("--- Identified Estimand ---")
+    print(identified_estimand)
+
+    # 4. Estimate the causal effect.
+    estimate = model.estimate_effect(
+        identified_estimand,
+        method_name="backdoor.propensity_score_matching",
+        target_units="ate" # Average Treatment Effect
+    )
+    print("\\n--- Causal Estimate ---")
+    print(estimate)
+
+    # 5. Refute the estimate.
+    refutation = model.refute_estimate(
+        identified_estimand,
+        estimate,
+        method_name="random_common_cause"
+    )
+    print("\\n--- Refutation Results ---")
+    print(refutation)
+
+except NameError as e:
+    print(f"ERROR: {e}")
+    print("Please define a pandas DataFrame named 'df' and assign your data to it.")
+except Exception as e:
+    print(f"An error occurred during the DoWhy analysis: {e}")
+`;
+            }
+
+            const code = `import networkx as nx
+import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+# Create a directed graph from your visual model
+G = nx.DiGraph()
+G.add_nodes_from([
+${nodeLines}
+])
+G.add_edges_from([
+${edgeLines}
+])
+${analysisCode}
+# Visualize the graph (optional)
+try:
+    pos = nx.spring_layout(G, seed=42) 
+    nx.draw(G, pos, with_labels=True, node_color='lightblue', 
+            node_size=[len(n) * 300 for n in G.nodes()],
+            font_size=10, font_weight='bold', arrows=True)
+    plt.title("Causal Graph")
+    plt.show()
+except Exception as e:
+    print(f"Could not plot graph: {e}")
+`;
+            codeOutput.textContent = code;
+        }
+        
+        // --- Initial Setup & Listeners ---
+        addNodeBtn.addEventListener('click', openAddNodeModal);
+        clearGraphBtn.addEventListener('click', openClearGraphModal);
+        findPathsBtn.addEventListener('click', findBackdoorPaths);
+        clearAnalysisBtn.addEventListener('click', clearAnalysis);
+        createDowhyBtn.addEventListener('click', () => generateCode(true));
+        svg.on("click", deselectNode);
+        copyCodeBtn.addEventListener('click', () => { navigator.clipboard.writeText(codeOutput.textContent).then(() => { copyCodeBtn.textContent = 'Copied!'; setTimeout(() => { copyCodeBtn.textContent = 'Copy'; }, 2000); }); });
+        render();
+    });
+</script>
+
+</body>
+</html>
